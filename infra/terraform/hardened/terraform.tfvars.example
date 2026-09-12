@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# Copy this file to terraform.tfvars (already in .gitignore) and fill in
+# a real jwt_secret. Never commit terraform.tfvars.
+#
+# Generate a strong secret with:
+#   openssl rand -hex 32
+# ---------------------------------------------------------------------------
+
+aws_region   = "us-east-1"
+project_name = "yvan-todo-api"
+environment  = "dev"
+owner        = "yvan-saf"
+
+dynamodb_table_name = "TasksHardened"
+
+lambda_runtime     = "python3.12"
+lambda_timeout     = 30
+lambda_memory      = 128
+authorizer_timeout = 10
+
+jwt_secret               = "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32"
+jwt_authorizer_cache_ttl = 300
+
+throttling_rate_limit  = 100
+throttling_burst_limit = 200
+
+alert_email        = ""
+log_retention_days = 7

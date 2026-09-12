@@ -1,14 +1,13 @@
 # ===========================================================================
-# Lambda — todo-api monolithic function (vulnerable version)
+# Lambda: todo-api monolithic function (vulnerable version)
 #
 # Intentionally insecure for demonstration purposes:
-# - no IMDSv2 enforcement
 # - no X-Ray tracing
-# - table name passed as environment variable (visible in Lambda config)
-# - no reserved concurrency (susceptible to cost abuse)
+# - no reserved concurrency
+# - table name exposed in environment variables
+# - execution role with dynamodb:* (see iam.tf)
 # ===========================================================================
 
-# Package the Python source code into a ZIP file
 data "archive_file" "lambda_zip" {
   type        = "zip"
   source_file = "${path.module}/../../../src/vulnerable/handler.py"
@@ -17,8 +16,8 @@ data "archive_file" "lambda_zip" {
 
 resource "aws_lambda_function" "todo_api" {
   function_name = "${local.name_prefix}-handler"
-  description   = "Vulnerable Todo API — for security demonstration only"
-  role          = aws_iam_role.lambda_role.arn
+  description   = "Vulnerable Todo API, for security demonstration only"
+  role          = aws_iam_role.lambda_exec.arn
   runtime       = var.lambda_runtime
   handler       = "handler.lambda_handler"
   timeout       = var.lambda_timeout
@@ -30,24 +29,14 @@ resource "aws_lambda_function" "todo_api" {
   environment {
     variables = {
       TABLE_NAME = var.dynamodb_table_name
-      # No secrets or credentials here — but the table name is exposed
-      # which helps an attacker understand the data model
     }
   }
-
-  # No X-Ray tracing — attacker actions leave minimal traces
-  # In the hardened version: tracing_config mode = "Active"
-
-  # No reserved concurrency — 5000 concurrent requests can be triggered
-  # leading to unexpected AWS costs
-  # In the hardened version: reserved_concurrent_executions = 10
 
   tags = {
     Name = "${local.name_prefix}-handler"
   }
 }
 
-# CloudWatch Log Group for Lambda logs
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${aws_lambda_function.todo_api.function_name}"
   retention_in_days = var.log_retention_days

@@ -1,13 +1,8 @@
 # ===========================================================================
 # Monitoring — CloudWatch (vulnerable version)
-#
-# Minimal monitoring — only basic Lambda error alarms.
-# There are no alarms on unusual traffic patterns, no API Gateway
-# access logs, and no alerts on suspicious activity.
-# An attack can run undetected for a long time.
+# Minimal monitoring — basic Lambda error alarm only.
 # ===========================================================================
 
-# SNS topic for alerts
 resource "aws_sns_topic" "alerts" {
   name = "${local.name_prefix}-alerts"
 
@@ -16,7 +11,6 @@ resource "aws_sns_topic" "alerts" {
   }
 }
 
-# Optional email subscription
 resource "aws_sns_topic_subscription" "email" {
   count = var.alert_email != "" ? 1 : 0
 
@@ -25,9 +19,6 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alert_email
 }
 
-# Basic alarm — Lambda errors only
-# No alarm on invocation count spikes (cost abuse goes undetected)
-# No alarm on API Gateway 4xx (IDOR attempts go undetected)
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   alarm_name          = "${local.name_prefix}-lambda-errors"
   alarm_description   = "Lambda function errors"

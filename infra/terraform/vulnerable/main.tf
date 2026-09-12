@@ -6,18 +6,19 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
   }
 
-  # Local backend — state stays on the machine running Terraform.
-  # On a full-permission AWS account, replace this with an S3 backend
-  # and a DynamoDB table for state locking.
   backend "local" {}
 }
 
 provider "aws" {
   region = var.aws_region
 
-  # Pass credentials through environment variables only — never hardcode them:
+  # Pass credentials through environment variables only:
   # export AWS_ACCESS_KEY_ID="..."
   # export AWS_SECRET_ACCESS_KEY="..."
   # export AWS_SESSION_TOKEN="..."

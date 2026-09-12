@@ -1,54 +1,39 @@
 # ===========================================================================
-# IAM — Lambda execution role (vulnerable version)
+# IAM: Lambda execution role (vulnerable version)
 #
-# Intentionally overpermissioned for demonstration purposes:
-# - single shared role for the Lambda function
-# - dynamodb:* grants full access to the Tasks table
-#   which includes Scan, DeleteTable, ExportTableToS3, and more
+# Intentionally overprivileged for demonstration purposes:
+# dynamodb:* on the Tasks table instead of the five actions actually needed.
+# No permission boundary, no resource level restriction beyond the table.
 #
-# In the hardened version, the role is restricted to only the five
-# DynamoDB actions the application actually needs:
-# PutItem, GetItem, UpdateItem, DeleteItem, Query
+# This role is created directly in this personal AWS account. The hardened
+# version documents and implements the least privilege equivalent with only
+# PutItem, GetItem, UpdateItem, DeleteItem and Query.
 # ===========================================================================
 
-# Trust policy — allows Lambda service to assume this role
-data "aws_iam_policy_document" "lambda_trust" {
+data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
-    effect = "Allow"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
 
     principals {
       type        = "Service"
       identifiers = ["lambda.amazonaws.com"]
     }
-
-    actions = ["sts:AssumeRole"]
   }
 }
 
-# IAM Role for the Lambda function
-resource "aws_iam_role" "lambda_role" {
+resource "aws_iam_role" "lambda_exec" {
   name               = "${local.name_prefix}-lambda-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 
   tags = {
     Name = "${local.name_prefix}-lambda-role"
   }
 }
 
-# Attach basic Lambda execution policy (CloudWatch Logs)
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-# Overpermissive DynamoDB policy — dynamodb:* on the Tasks table
-# An attacker who compromises this Lambda can:
-# - Scan the entire table (enumerate all users data)
-# - DeleteTable (destroy the entire database)
-# - ExportTableToS3 (exfiltrate all data to an external bucket)
-# - CreateBackup (exfiltrate via backup)
-data "aws_iam_policy_document" "dynamodb_policy" {
+data "aws_iam_policy_document" "lambda_permissions" {
   statement {
+    sid    = "DynamoDBFullAccessOnTasksTable"
     effect = "Allow"
 
     actions = [
@@ -56,13 +41,27 @@ data "aws_iam_policy_document" "dynamodb_policy" {
     ]
 
     resources = [
-      aws_dynamodb_table.tasks.arn
+      aws_dynamodb_table.tasks.arn,
+      "${aws_dynamodb_table.tasks.arn}/index/*"
     ]
+  }
+
+  statement {
+    sid    = "LambdaLogging"
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = ["arn:aws:logs:${var.aws_region}:*:*"]
   }
 }
 
-resource "aws_iam_role_policy" "dynamodb_policy" {
-  name   = "${local.name_prefix}-dynamodb-policy"
-  role   = aws_iam_role.lambda_role.id
-  policy = data.aws_iam_policy_document.dynamodb_policy.json
+resource "aws_iam_role_policy" "lambda_permissions" {
+  name   = "${local.name_prefix}-lambda-policy"
+  role   = aws_iam_role.lambda_exec.id
+  policy = data.aws_iam_policy_document.lambda_permissions.json
 }

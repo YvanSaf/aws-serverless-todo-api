@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # Environment values
-# This file is listed in .gitignore — do not commit it
+# This file is listed in .gitignore, do not commit it
 # ---------------------------------------------------------------------------
 
 aws_region   = "us-east-1"

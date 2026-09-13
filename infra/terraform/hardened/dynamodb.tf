@@ -2,7 +2,8 @@
 # DynamoDB: Tasks table (hardened version)
 #
 # Fixes applied relative to infra/terraform/vulnerable/dynamodb.tf:
-# - encryption at rest with the AWS managed key (aws/dynamodb)
+# - encryption at rest with the AWS managed key (aws/dynamodb), used
+#   automatically when kms_key_arn is left unset with encryption enabled
 # - point-in-time recovery enabled (35 day rolling window)
 # - a userId GSI so the API can Query instead of Scan
 # ===========================================================================
@@ -29,8 +30,7 @@ resource "aws_dynamodb_table" "tasks" {
   }
 
   server_side_encryption {
-    enabled     = true
-    kms_key_arn = "alias/aws/dynamodb"
+    enabled = true
   }
 
   point_in_time_recovery {

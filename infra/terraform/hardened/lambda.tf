@@ -3,10 +3,14 @@
 #
 # Fixes applied relative to infra/terraform/vulnerable/lambda.tf:
 # - X-Ray active tracing enabled on both functions
-# - reserved concurrency on todo_api to cap the blast radius of any abuse
-#   that gets past the API Gateway throttle
 # - execution roles scoped to least privilege (see iam.tf)
 # - a Lambda Authorizer validates every request before it reaches todo_api
+#
+# Reserved concurrency was intentionally left out: it requires knowing
+# how much unreserved concurrency the AWS account has available, which
+# varies per account and is often very low on new personal accounts.
+# The API Gateway throttle (see api_gateway.tf) is the actual rate
+# limiting control for this project.
 #
 # Only authorizer.py needs PyJWT, and handler.py needs aws-xray-sdk to
 # trace the DynamoDB calls it makes. Both functions are packaged from
@@ -54,8 +58,6 @@ resource "aws_lambda_function" "todo_api" {
 
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-
-  reserved_concurrent_executions = 10
 
   tracing_config {
     mode = "Active"

@@ -12,6 +12,13 @@
 #   ./04-scraping.sh [vulnerable|hardened] [request_count] [concurrency]
 #
 # Defaults: 5000 requests, 50 at a time.
+#
+# Optional environment variable:
+#   AUTH_TOKEN   Bearer token for an authenticated user. Required to
+#                reach the throttle on the hardened version, otherwise
+#                every request is rejected with 401 before it ever
+#                counts against the rate limit.
+#                Generate one with src/hardened/generate_token.py
 
 set -uo pipefail
 
@@ -35,6 +42,11 @@ if [ -z "$API" ]; then
     exit 1
 fi
 
+AUTH_HEADER=()
+if [ -n "${AUTH_TOKEN:-}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${AUTH_TOKEN}")
+fi
+
 echo "============================================================"
 echo "Attack 4: Scraping and cost abuse"
 echo "Target version : $VERSION"
@@ -54,7 +66,7 @@ echo
 echo "Sending $COUNT requests, $CONCURRENCY at a time..."
 START_TIME=$(date +%s)
 
-seq "$COUNT" | xargs -P "$CONCURRENCY" -I{} curl -s -o /dev/null -w "%{http_code}\n" "$API/tasks" > /tmp/scraping_results.txt
+seq "$COUNT" | xargs -P "$CONCURRENCY" -I{} curl -s -o /dev/null -w "%{http_code}\n" "${AUTH_HEADER[@]}" "$API/tasks" > /tmp/scraping_results.txt
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
@@ -67,11 +79,17 @@ sort /tmp/scraping_results.txt | uniq -c | sort -rn
 
 TOTAL_200=$(grep -c "^200$" /tmp/scraping_results.txt || true)
 TOTAL_429=$(grep -c "^429$" /tmp/scraping_results.txt || true)
+TOTAL_401=$(grep -c "^401$" /tmp/scraping_results.txt || true)
 
 echo
 if [ "$TOTAL_429" -gt 0 ]; then
     echo "RESULT: BLOCKED"
     echo "$TOTAL_429 requests were throttled with 429 Too Many Requests."
+elif [ "$TOTAL_401" -eq "$COUNT" ]; then
+    echo "RESULT: INCONCLUSIVE"
+    echo "Every request was rejected by the Lambda Authorizer before it"
+    echo "could count against the throttle. Set AUTH_TOKEN to a valid JWT"
+    echo "to actually test the rate limit, not just the authentication layer."
 elif [ "$TOTAL_200" -eq "$COUNT" ]; then
     echo "RESULT: VULNERABLE"
     echo "All $COUNT requests succeeded with no throttling of any kind."
@@ -79,3 +97,4 @@ else
     echo "RESULT: MIXED"
     echo "Review the status code breakdown above."
 fi
+

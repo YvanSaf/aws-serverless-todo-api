@@ -9,6 +9,14 @@
 #
 # Usage:
 #   ./02-injection.sh [vulnerable|hardened]
+#
+# Optional environment variable:
+#   AUTH_TOKEN   Bearer token for an authenticated user. Required to
+#                reach the validator on the hardened version, since
+#                every route sits behind the Lambda Authorizer. Not
+#                needed against the vulnerable version, which has no
+#                authentication at all.
+#                Generate one with src/hardened/generate_token.py
 
 set -uo pipefail
 
@@ -29,6 +37,11 @@ if [ -z "$API" ]; then
     exit 1
 fi
 
+AUTH_HEADER=()
+if [ -n "${AUTH_TOKEN:-}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${AUTH_TOKEN}")
+fi
+
 PAYLOAD='<script>alert(document.cookie)</script>'
 
 echo "============================================================"
@@ -42,6 +55,7 @@ echo
 echo "[1/2] Sending POST /tasks with an unescaped script tag as the title..."
 STATUS=$(curl -s -o /tmp/injection_result.json -w "%{http_code}" \
     -X POST "$API/tasks" \
+    "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
     -d "{\"title\":\"${PAYLOAD}\",\"userId\":\"attacker-001\",\"description\":\"XSS test\"}")
 
@@ -58,7 +72,7 @@ if [ "$STATUS" = "201" ]; then
     else
         TASK_ID=$(grep -o '"taskId": *"[^"]*"' /tmp/injection_result.json | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
     fi
-    curl -s "$API/tasks/${TASK_ID}"
+    curl -s "${AUTH_HEADER[@]}" "$API/tasks/${TASK_ID}"
     echo
     echo
     echo "RESULT: VULNERABLE"
@@ -68,7 +82,13 @@ elif [ "$STATUS" = "400" ]; then
     echo "RESULT: BLOCKED"
     echo "The request was rejected before reaching DynamoDB, validator.py"
     echo "detected the disallowed characters."
+elif [ "$STATUS" = "401" ]; then
+    echo "RESULT: INCONCLUSIVE"
+    echo "The request was rejected by the Lambda Authorizer before it ever"
+    echo "reached the validator. Set AUTH_TOKEN to a valid JWT to actually"
+    echo "test the validation logic, not just the authentication layer."
 else
     echo "RESULT: UNEXPECTED"
     echo "Received HTTP $STATUS, review the response above."
 fi
+

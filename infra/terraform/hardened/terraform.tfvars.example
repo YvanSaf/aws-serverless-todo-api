@@ -24,5 +24,13 @@ jwt_authorizer_cache_ttl = 300
 throttling_rate_limit  = 100
 throttling_burst_limit = 200
 
+# Note: on a fresh personal AWS account, the default Lambda concurrency
+# limit can be as low as 10 across the whole account. If you want to
+# actually trigger a 429 during testing without sending an unrealistic
+# number of requests, temporarily lower throttling_rate_limit (for
+# example to 5) so the API Gateway throttle is reachable before the
+# account's own concurrency ceiling causes 503s instead. Check your
+# real limit with: aws lambda get-account-settings
+
 alert_email        = ""
 log_retention_days = 7

@@ -5,8 +5,9 @@ vulnerabilities of the vulnerable version of the Todo API, and to verify
 that the hardened version blocks each one.
 
 The same four scripts are run twice: once against the vulnerable deployment,
-once against the hardened deployment. The contrast between the two runs is
-the actual deliverable of this project.
+once against the hardened deployment. The screenshots below are taken
+directly from those runs, side by side, so the contrast is visible without
+having to reproduce the attacks yourself.
 
 ## Prerequisites
 
@@ -15,6 +16,9 @@ the actual deliverable of this project.
 - `bash`, `curl`
 - `jq` recommended but not required, the scripts fall back to `grep`/`sed`
   when it is not installed
+- For the hardened version, a JWT generated with
+  `src/hardened/generate_token.py` (see each attack below for which token
+  is needed)
 
 ## How the scripts work
 
@@ -50,10 +54,15 @@ user in the table.
 then calls `GET /tasks` and counts how many distinct `userId` values come
 back in the same response.
 
-**Expected result:**
-- Vulnerable: HTTP 200, tasks from both users returned together
-- Hardened: HTTP 401, the Lambda Authorizer rejects the request before it
-  reaches the data
+**Vulnerable result:** HTTP 200, tasks from both users returned together.
+
+![Enumeration on the vulnerable version](../forensic/findings/vulnerable/attack-01-enumeration.png)
+
+**Hardened result:** HTTP 401, the Lambda Authorizer rejects the request
+before it reaches the data. No token was sent on purpose here, this attack
+tests the absence of authentication itself.
+
+![Enumeration blocked on the hardened version](../forensic/findings/hardened/attack-08-401-no-token.png)
 
 ## Attack 2: Stored XSS injection
 
@@ -67,11 +76,25 @@ title is written to DynamoDB unescaped.
 `<script>alert(document.cookie)</script>` as the title, then reads the task
 back to confirm the payload is stored raw.
 
-**Expected result:**
-- Vulnerable: HTTP 201, the payload is accepted and returned unescaped by
-  the API
-- Hardened: HTTP 400, `validator.py` rejects the disallowed characters
-  before the item is ever written
+**Vulnerable result:** HTTP 201, the payload is accepted and returned
+unescaped by the API.
+
+![XSS payload accepted on the vulnerable version](../forensic/findings/vulnerable/attack-02-xss-injection.png)
+
+The item as stored in DynamoDB, script tag intact:
+
+![XSS payload stored raw in DynamoDB](../forensic/findings/vulnerable/attack-03-xss-stored-dynamodb.png)
+
+**Hardened result:** HTTP 400, `validator.py` rejects the disallowed
+characters before the item is ever written. Requires `AUTH_TOKEN` set to a
+valid JWT, otherwise the request is stopped at the authentication layer
+before it ever reaches the validator.
+
+```bash
+AUTH_TOKEN=$ATTACKER ./02-injection.sh hardened
+```
+
+![XSS payload rejected on the hardened version](../forensic/findings/hardened/attack-09-400-xss-blocked.png)
 
 ## Attack 3: IDOR (Insecure Direct Object Reference)
 
@@ -84,14 +107,28 @@ any task, regardless of who owns it.
 
 **What the script does:** creates a task for a fake victim user, then reads
 and deletes that same task while acting as an attacker who never proves any
-identity. An optional `ATTACKER_TOKEN` environment variable can be set once
-the hardened authorizer issues real tokens, to simulate an authenticated
-attacker targeting someone else's data.
+identity.
 
-**Expected result:**
-- Vulnerable: HTTP 200 on both the read and the delete
-- Hardened: HTTP 403, the ownership check rejects the request once the
-  caller's `userId` does not match the task owner
+**Vulnerable result:** HTTP 200 on both the read and the delete.
+
+Read:
+
+![IDOR read on the vulnerable version](../forensic/findings/vulnerable/attack-04-idor-read.png)
+
+Delete:
+
+![IDOR delete on the vulnerable version](../forensic/findings/vulnerable/attack-05-idor-delete.png)
+
+**Hardened result:** HTTP 403 on both attempts, the ownership check rejects
+the request once the caller's `userId` does not match the task owner.
+Requires two different tokens, one for the victim (to create the task) and
+one for the attacker (to attempt the read and delete).
+
+```bash
+VICTIM_TOKEN=$VICTIM ATTACKER_TOKEN=$ATTACKER ./03-idor.sh hardened
+```
+
+![IDOR blocked on the hardened version](../forensic/findings/hardened/attack-10-403-idor-blocked.png)
 
 ## Attack 4: Scraping and cost abuse
 
@@ -103,16 +140,54 @@ attacker can both scrape the entire dataset and drive up the AWS bill by
 sheer volume.
 
 **What the script does:** sends a configurable number of concurrent
-requests to `GET /tasks` (5000 by default, 50 at a time) and reports the
-breakdown of HTTP status codes returned.
+requests to `GET /tasks` and reports the breakdown of HTTP status codes
+returned.
 
-**Expected result:**
-- Vulnerable: requests succeed with HTTP 200 almost across the board. A
-  small number may fail with HTTP 503 if the AWS account's default Lambda
-  concurrency limit is briefly exceeded, this is an accidental account level
-  ceiling, not a security control
-- Hardened: once the 100 req/s API Gateway throttle is exceeded, requests
-  start failing with a predictable HTTP 429
+**Vulnerable result:** 5000 requests, almost all succeed with HTTP 200. A
+small number failed with HTTP 503, an accidental account level Lambda
+concurrency ceiling, not a security control.
+
+![Scraping succeeding on the vulnerable version](../forensic/findings/vulnerable/attack-06-scraping-requests.png)
+
+The invocation spike as seen in CloudWatch, including the account's
+concurrency throttles:
+
+![CloudWatch showing the invocation and throttle spike](../forensic/findings/vulnerable/attack-07-scraping-cloudwatch.png)
+
+**Hardened result:** once the configured throttle is exceeded, requests
+start failing with a predictable HTTP 429. Requires `AUTH_TOKEN` set to a
+valid JWT, otherwise every request is rejected with 401 before it can count
+against the throttle.
+
+```bash
+AUTH_TOKEN=$ATTACKER ./04-scraping.sh hardened 300 20
+```
+
+![Scraping throttled on the hardened version](../forensic/findings/hardened/attack-11-429-rate-limited.png)
+
+Note: on a fresh personal AWS account, the account's own default Lambda
+concurrency limit can sit below the configured API Gateway throttle,
+which means very high concurrency mostly produces 503s from Lambda itself
+rather than 429s from the throttle. `throttling_rate_limit` was lowered in
+`terraform.tfvars` to a value low enough to actually exceed at realistic
+test volumes. See `docs/lessons-learned.md` for the full explanation.
+
+## Tracing a legitimate request (hardened only)
+
+X-Ray active tracing and structured CloudWatch logs are hardening measures
+with no equivalent to attack on the vulnerable version, they exist to make
+a legitimate request traceable end to end, and a blocked one easy to
+investigate after the fact.
+
+Service map of a legitimate request, API Gateway through the Lambda
+function to DynamoDB:
+
+![X-Ray service map](../forensic/findings/hardened/attack-12-xray-trace.png)
+
+The same invocation's CloudWatch log line, with the X-Ray trace and segment
+IDs that tie the two views together:
+
+![CloudWatch log line with X-Ray trace ID](../forensic/findings/hardened/attack-13-cloudwatch-structured-logs.png)
 
 ## Running the full sequence
 
@@ -124,14 +199,18 @@ cd attack-simulation/scripts
 ./03-idor.sh vulnerable
 ./04-scraping.sh vulnerable
 
-# after the hardened version is deployed
+# after the hardened version is deployed, generate tokens first
+export VICTIM=$(JWT_SECRET="..." python3 ../../src/hardened/generate_token.py victim-001)
+export ATTACKER=$(JWT_SECRET="..." python3 ../../src/hardened/generate_token.py attacker-999)
+
 ./01-enumeration.sh hardened
-./02-injection.sh hardened
-./03-idor.sh hardened
-./04-scraping.sh hardened
+AUTH_TOKEN=$ATTACKER ./02-injection.sh hardened
+VICTIM_TOKEN=$VICTIM ATTACKER_TOKEN=$ATTACKER ./03-idor.sh hardened
+AUTH_TOKEN=$ATTACKER ./04-scraping.sh hardened 300 20
 ```
 
-Screenshots taken during each run are collected in
+All screenshots above, plus a few supplementary ones taken during the same
+sessions, are collected in
 [`forensic/findings/`](../forensic/findings).
 
 ## Safety note
